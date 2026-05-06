@@ -1,47 +1,44 @@
-# Alpamayo RL Post-training using Cosmos RL
+# Cosmos RL を使った Alpamayo RL Post-training
 
-This directory contains the RL post-training code for fine-tuning
-Alpamayo models (VLM backbone with discrete action-token variant) using GRPO via Cosmos-RL. The code supports both [Alpamayo 1](https://huggingface.co/nvidia/Alpamayo-R1-10B) and [Alpamayo 1.5](https://huggingface.co/nvidia/Alpamayo-1.5-10B).
+このディレクトリには、Cosmos-RL 経由の GRPO を使って Alpamayo モデル (離散 action-token variant を持つ VLM backbone) をファインチューニングするための RL post-training コードが含まれています。このコードは [Alpamayo 1](https://huggingface.co/nvidia/Alpamayo-R1-10B) と [Alpamayo 1.5](https://huggingface.co/nvidia/Alpamayo-1.5-10B) の両方をサポートします。
 
 <p align="center">
   <img src="assets/alpamayo_rl_framework.png" alt="Alpamayo RL Framework" width="700">
 </p>
 
-## Table of contents
+## 目次
 
-1. [Getting started](#getting-started)
-   1. [Python environment](#1-python-environment)
-   2. [Environment variables](#2-environment-variables)
-   3. [Authenticate with HuggingFace](#3-authenticate-with-huggingface)
-   4. [Download and prepare the Alpamayo model](#4-download-and-prepare-the-alpamayo-model)
-   5. [Download a subset of the Physical AI dataset](#5-download-a-subset-of-the-physical-ai-dataset)
-   6. [Launch RL training](#6-launch-rl-training)
-   7. [Export the RL checkpoint for inference](#7-export-the-rl-checkpoint-for-inference)
-2. [Pipeline overview](#pipeline-overview)
-   1. [Architecture](#architecture)
-   2. [Key files](#key-files)
-   3. [Key parameters](#key-parameters)
-   4. [Reward](#reward)
-3. [Multi-node large-scale training](#multi-node-large-scale-training)
+1. [はじめに](#getting-started)
+   1. [Python 環境](#1-python-environment)
+   2. [環境変数](#2-environment-variables)
+   3. [HuggingFace 認証](#3-authenticate-with-huggingface)
+   4. [Alpamayo モデルのダウンロードと準備](#4-download-and-prepare-the-alpamayo-model)
+   5. [Physical AI データセットのサブセットをダウンロード](#5-download-a-subset-of-the-physical-ai-dataset)
+   6. [RL 学習の起動](#6-launch-rl-training)
+   7. [推論用に RL チェックポイントを export](#7-export-the-rl-checkpoint-for-inference)
+2. [パイプライン概要](#pipeline-overview)
+   1. [アーキテクチャ](#architecture)
+   2. [主要ファイル](#key-files)
+   3. [主要パラメータ](#key-parameters)
+   4. [報酬](#reward)
+3. [マルチノード大規模学習](#multi-node-large-scale-training)
 4. [FAQ](#faq)
 
-## Getting started
+<a id="getting-started"></a>
+## はじめに
 
-This section walks you through a **single-node local verification run** —
-from environment setup to launching a short RL training job on a small
-dataset. The goal is to verify that the full pipeline (model loading,
-rollout generation, reward computation, GRPO training) works end-to-end
-before scaling to multi-node cluster training.
+このセクションでは、環境構築から小さなデータセットでの短い RL 学習ジョブの起動まで、**単一ノードでのローカル検証実行**を順に説明します。目的は、マルチノードクラスタ学習へスケールする前に、パイプライン全体 (モデル読み込み、rollout 生成、報酬計算、GRPO 学習) が end-to-end で動作することを確認することです。
 
-> **Hardware requirement:** The local test config requires at least **5 GPUs**, each with at least 80 GB of VRAM.
+> **ハードウェア要件:** ローカルテスト config には、少なくとも **5 GPU** が必要で、各 GPU は 80 GB 以上の VRAM を備えている必要があります。
 
-First, define your working directory (all subsequent commands reference `$YOUR_HOME`):
+まず作業ディレクトリを定義します (以降のコマンドはすべて `$YOUR_HOME` を参照します)。
 
 ```bash
 export YOUR_HOME="/path/to/your/workspace"
 ```
 
-### 1. Python environment
+<a id="1-python-environment"></a>
+### 1. Python 環境
 
 ```bash
 export UV_CACHE_DIR="$YOUR_HOME/.cache/uv"
@@ -49,13 +46,14 @@ export UV_CACHE_DIR="$YOUR_HOME/.cache/uv"
 cd "$YOUR_HOME/alpamayo"
 uv venv alpamayo_env
 source alpamayo_env/bin/activate
-uv sync --active --no-install-package flash-attn   # install all deps except flash-attn
-uv sync --active                                   # then build flash-attn (needs torch)
+uv sync --active --no-install-package flash-attn   # flash-attn 以外の依存関係をすべてインストール
+uv sync --active                                   # その後 flash-attn をビルド (torch が必要)
 ```
 
-### 2. Environment variables
+<a id="2-environment-variables"></a>
+### 2. 環境変数
 
-Set the following once per session (or add to `~/.bashrc`):
+セッションごとに次を設定します (または `~/.bashrc` に追加します)。
 
 ```bash
 # ── Paths ────────────────────────────────────────────────────────
@@ -71,44 +69,41 @@ export HF_HOME="$YOUR_HOME/.cache/huggingface"
 export WANDB_API_KEY="<your_wandb_api_key>"
 ```
 
-> **Tip:** If you hit HuggingFace Hub rate limits, set `export HF_HUB_OFFLINE=1`
-> and `export TRANSFORMERS_OFFLINE=1` to force all model/tokenizer loads from
-> local cache.
+> **Tip:** HuggingFace Hub の rate limit に当たる場合は、`export HF_HUB_OFFLINE=1` と `export TRANSFORMERS_OFFLINE=1` を設定し、モデル/トークナイザの読み込みをすべてローカルキャッシュから行わせてください。
 
-| Variable                 | Required    | Purpose                                                                                  |
-| ------------------------ | ----------- | ---------------------------------------------------------------------------------------- |
-| `ALPAMAYO_WORKSPACE`     | yes         | Root of the `alpamayo` checkout                                                          |
-| `ALPAMAYO_MODEL_DIR`     | yes         | Pre-trained Alpamayo model directory (output of step 4)                                  |
-| `ALPAMAYO_PAI_LOCAL_DIR` | yes         | PAI dataset root (output of step 5); read by entry scripts at runtime                    |
-| `ALPAMAYO_LOG_DIR`       | yes         | Directory for Cosmos-RL logs                                                             |
-| `UV_CACHE_DIR`           | recommended | uv cache location (set in step 1, before `uv venv`)                                      |
-| `HF_HOME`                | recommended | HuggingFace cache location                                                               |
-| `HF_HUB_OFFLINE`         | optional    | Set to `1` to skip HuggingFace Hub calls (useful for rate limits or air-gapped clusters) |
-| `TRANSFORMERS_OFFLINE`   | optional    | Set to `1` alongside `HF_HUB_OFFLINE`                                                    |
-| `WANDB_API_KEY`          | recommended | Weights & Biases API key; omit if using `[logging].logger = ["console"]`                 |
+| 変数                     | 必須        | 目的                                                                                           |
+| ------------------------ | ----------- | ---------------------------------------------------------------------------------------------- |
+| `ALPAMAYO_WORKSPACE`     | yes         | `alpamayo` checkout のルート                                                                   |
+| `ALPAMAYO_MODEL_DIR`     | yes         | 事前学習済み Alpamayo モデルディレクトリ (step 4 の出力)                                      |
+| `ALPAMAYO_PAI_LOCAL_DIR` | yes         | PAI データセットルート (step 5 の出力)。実行時に entry script から読み込まれます              |
+| `ALPAMAYO_LOG_DIR`       | yes         | Cosmos-RL ログ用ディレクトリ                                                                   |
+| `UV_CACHE_DIR`           | recommended | uv cache の場所 (step 1 で `uv venv` の前に設定)                                               |
+| `HF_HOME`                | recommended | HuggingFace cache の場所                                                                       |
+| `HF_HUB_OFFLINE`         | optional    | `1` にすると HuggingFace Hub 呼び出しを省略します (rate limit や air-gapped cluster で有用)    |
+| `TRANSFORMERS_OFFLINE`   | optional    | `HF_HUB_OFFLINE` と併せて `1` に設定します                                                     |
+| `WANDB_API_KEY`          | recommended | Weights & Biases API key。`[logging].logger = ["console"]` を使う場合は省略できます           |
 
-### 3. Authenticate with HuggingFace
+<a id="3-authenticate-with-huggingface"></a>
+### 3. HuggingFace 認証
 
-The model and dataset require access to gated resources. Request access here:
+モデルとデータセットは gated resource へのアクセスを必要とします。以下からアクセスを申請してください。
 
 - [PhysicalAI-Autonomous-Vehicles Dataset](https://huggingface.co/datasets/nvidia/PhysicalAI-Autonomous-Vehicles)
 - [Alpamayo 1 Model Weights](https://huggingface.co/nvidia/Alpamayo-R1-10B)
 - [Alpamayo 1.5 Model Weights](https://huggingface.co/nvidia/Alpamayo-1.5-10B)
 
-Then authenticate:
+その後、認証します。
 
 ```bash
 hf auth login
 ```
 
-Get your token at: https://huggingface.co/settings/tokens
+トークンはこちらで取得できます: https://huggingface.co/settings/tokens
 
-### 4. Download and prepare the Alpamayo model
+<a id="4-download-and-prepare-the-alpamayo-model"></a>
+### 4. Alpamayo モデルのダウンロードと準備
 
-Convert the HuggingFace release model into a training-ready checkpoint.
-By default, the script downloads
-[Alpamayo 1.5 Model Weights](https://huggingface.co/nvidia/Alpamayo-1.5-10B). Use `--alpamayo-model` to switch to
-[Alpamayo 1 Model Weights](https://huggingface.co/nvidia/Alpamayo-R1-10B) if needed.
+HuggingFace のリリースモデルを、学習可能なチェックポイントへ変換します。デフォルトでは、スクリプトは [Alpamayo 1.5 Model Weights](https://huggingface.co/nvidia/Alpamayo-1.5-10B) をダウンロードします。必要に応じて [Alpamayo 1 Model Weights](https://huggingface.co/nvidia/Alpamayo-R1-10B) に切り替えるには `--alpamayo-model` を使います。
 
 ```bash
 cd "$ALPAMAYO_WORKSPACE"
@@ -117,7 +112,8 @@ python scripts/convert_release_config_to_training.py \
   --output-dir "$ALPAMAYO_MODEL_DIR"
 ```
 
-### 5. Download a subset of the Physical AI dataset
+<a id="5-download-a-subset-of-the-physical-ai-dataset"></a>
+### 5. Physical AI データセットのサブセットをダウンロード
 
 ```bash
 python scripts/download_pai.py \
@@ -128,7 +124,7 @@ python scripts/download_pai.py \
   --output-dir "$ALPAMAYO_PAI_LOCAL_DIR"
 ```
 
-Then curate a mini subset of 16 driving clips for local RL training:
+次に、ローカル RL 学習用に 16 個の driving clip からなる mini subset を作成します。
 
 ```bash
 python scripts/curate_pai_samples.py \
@@ -138,22 +134,19 @@ python scripts/curate_pai_samples.py \
   --output-path "$ALPAMAYO_PAI_LOCAL_DIR/clip_index_mini.parquet"
 ```
 
-### 6. Launch RL training
+<a id="6-launch-rl-training"></a>
+### 6. RL 学習の起動
 
-Update the TOML config before launching. For local testing use
-`finetune/rl/toml/alpamayo_rvla_rl_local_test.toml`.
+起動前に TOML config を更新してください。ローカルテストには `finetune/rl/toml/alpamayo_rvla_rl_local_test.toml` を使います。
 
-Key fields to set:
+設定すべき主な field:
 
-1. `[train].output_dir`: where checkpoints and training artifacts are
-   written (e.g., `$YOUR_HOME/alpamayo_cosmos_rl_job/outputs`).
-2. `[policy].model_name_or_path`: set to `$ALPAMAYO_MODEL_DIR`.
-3. `[policy.parallelism].dp_shard_size`: `4` for local test (1 node),
-   `8` for cluster (multi-node).
-4. (Optional) `[logging].logger = ["console", "wandb"]`.
+1. `[train].output_dir`: チェックポイントと学習 artifact の出力先 (例: `$YOUR_HOME/alpamayo_cosmos_rl_job/outputs`)。
+2. `[policy].model_name_or_path`: `$ALPAMAYO_MODEL_DIR` に設定します。
+3. `[policy.parallelism].dp_shard_size`: ローカルテスト (1 node) では `4`、cluster (multi-node) では `8`。
+4. 任意: `[logging].logger = ["console", "wandb"]`。
 
-**Local test (single node):** activate the installed environment, then
-run from the alpamayo directory:
+**ローカルテスト (単一ノード):** インストール済み環境を activate し、alpamayo ディレクトリから実行します。
 
 ```bash
 cd "$ALPAMAYO_WORKSPACE"
@@ -165,34 +158,28 @@ cosmos-rl \
   finetune/rl/models/reasoning_vla/alpamayo_cosmos_rl_post_training_entry.py
 ```
 
-- `--policy 1 --rollout 1`: launch 1 policy replica and 1 rollout replica.
-  This overrides `n_init_replicas` in the TOML config.
+- `--policy 1 --rollout 1`: policy replica 1 個と rollout replica 1 個を起動します。これは TOML config の `n_init_replicas` を上書きします。
 
-- Training logs are written to `$ALPAMAYO_LOG_DIR/logs_<YYYYMMDD-HHMMSS>/`
-  with one file per process:
+- 学習ログは `$ALPAMAYO_LOG_DIR/logs_<YYYYMMDD-HHMMSS>/` に、プロセスごとに 1 ファイルずつ書き込まれます。
 
-  | Log file          | Process              | What it contains                                                                                 |
+  | ログファイル      | プロセス             | 内容                                                                                             |
   | ----------------- | -------------------- | ------------------------------------------------------------------------------------------------ |
-  | `controller.log`  | Cosmos-RL controller | Rollout dispatch, reward stats per step, buffer status (`pending rollouts`), weight sync events  |
-  | `policy_<i>.log`  | Policy replica *i*   | Model loading, training loss, gradient norms, checkpoint saving, per-rank data distribution      |
-  | `rollout_<i>.log` | Rollout replica *i*  | vLLM engine startup, generation throughput, weight receive events, reward computation per sample |
+  | `controller.log`  | Cosmos-RL controller | rollout dispatch、step ごとの reward stats、buffer status (`pending rollouts`)、weight sync event |
+  | `policy_<i>.log`  | Policy replica *i*   | モデル読み込み、training loss、gradient norm、checkpoint 保存、rank ごとのデータ分布             |
+  | `rollout_<i>.log` | Rollout replica *i*  | vLLM engine 起動、generation throughput、weight receive event、sample ごとの reward computation   |
 
-With the default settings, you should see training reward increase and
-trajectory L2 error decrease (reward improved from -0.28 to -0.21, and trajectory L2 decreased from 1.66 to 1.34). The local test finishes within ~10 minutes on a single 8×GPU (H100) node:
+デフォルト設定では、training reward が増加し、trajectory L2 error が低下するはずです (reward は -0.28 から -0.21 に改善し、trajectory L2 は 1.66 から 1.34 に低下)。ローカルテストは、単一の 8 GPU (H100) ノードで約 10 分以内に完了します。
 
 <p align="center">
   <img src="assets/local_training_reward_curves.png" alt="Local training reward curves" width="700">
 </p>
 
-### 7. Export the RL checkpoint for inference
+<a id="7-export-the-rl-checkpoint-for-inference"></a>
+### 7. 推論用に RL チェックポイントを export
 
-Cosmos-RL saves checkpoints as per-rank PyTorch files (`model_rank_<r>.pth`)
-under `<output_dir>/checkpoints/step_<N>/policy/`. These files contain
-DTensor shards and cannot be loaded directly with
-`ReasoningVLA.from_pretrained()`.
+Cosmos-RL は、`<output_dir>/checkpoints/step_<N>/policy/` 配下に rank ごとの PyTorch ファイル (`model_rank_<r>.pth`) としてチェックポイントを保存します。これらのファイルには DTensor shard が含まれるため、`ReasoningVLA.from_pretrained()` で直接読み込むことはできません。
 
-To convert a policy checkpoint into a standard HuggingFace checkpoint
-directory:
+policy checkpoint を標準的な HuggingFace checkpoint ディレクトリに変換するには、次を実行します。
 
 ```bash
 cd "$ALPAMAYO_WORKSPACE"
@@ -203,14 +190,11 @@ python scripts/convert_cosmos_rl_checkpoint.py \
   --output-dir "$YOUR_HOME/alpamayo_cosmos_rl_job/exported_model"
 ```
 
-- `--cosmos-policy-ckpt`: path to the Cosmos-RL policy checkpoint
-  directory (contains `model_rank_*.pth` files).
-- `--base-hf-ckpt`: the training-ready checkpoint directory produced by
-  step 4 (`$ALPAMAYO_MODEL_DIR`). Config, tokenizer, and processor files
-  are copied from here.
-- `--output-dir`: where to write the exported HF checkpoint.
+- `--cosmos-policy-ckpt`: Cosmos-RL policy checkpoint ディレクトリへのパス (`model_rank_*.pth` ファイルを含む)。
+- `--base-hf-ckpt`: step 4 で生成した学習用チェックポイントディレクトリ (`$ALPAMAYO_MODEL_DIR`)。Config、tokenizer、processor ファイルはここからコピーされます。
+- `--output-dir`: export した HF checkpoint の書き込み先。
 
-The exported checkpoint can then be loaded for inference:
+export した checkpoint は、推論用に次のように読み込めます。
 
 ```python
 from reasoning_vla.base_model import RLWrapperReasoningVLA
@@ -220,116 +204,83 @@ model = RLWrapperReasoningVLA.from_pretrained(
 )
 ```
 
-For a complete end-to-end example (loading data, running inference,
-visualizing reasoning and trajectories and chain-of-thought), see
-[`notebooks/rl_checkpoint_inference.ipynb`](notebooks/rl_checkpoint_inference.ipynb).
+データ読み込み、推論実行、reasoning / trajectory / chain-of-thought の可視化を含む完全な end-to-end 例は、[`notebooks/rl_checkpoint_inference.ipynb`](notebooks/rl_checkpoint_inference.ipynb) を参照してください。
 
-## Pipeline overview
+<a id="pipeline-overview"></a>
+## パイプライン概要
 
-### Architecture
+<a id="architecture"></a>
+### アーキテクチャ
 
-Alpamayo RL post-training is built on
-[Cosmos-RL](https://github.com/NVIDIA/Cosmos-RL), a scalable
-reinforcement learning framework for Physical AI workloads.
+Alpamayo RL post-training は、Physical AI workload 向けのスケーラブルな強化学習フレームワークである [Cosmos-RL](https://github.com/NVIDIA/Cosmos-RL) の上に構築されています。
 
-Each job consists of:
+各ジョブは次で構成されます。
 
-- one or more **policy replicas**, which train the model, and
-- one or more **rollout replicas**, which run inference to generate rollout samples.
+- モデルを学習する 1 個以上の **policy replica**
+- 推論を実行して rollout sample を生成する 1 個以上の **rollout replica**
 
-These components are coordinated by a central **cosmos-controller**,
-which dispatches rollouts, collects rewards, manages the training buffer,
-and periodically synchronizes the latest policy weights to the rollout replicas.
-This design enables asynchronous RL training at scale, while keeping rollout
-generation and policy optimization loosely coupled.
+これらの component は中央の **cosmos-controller** によって協調されます。cosmos-controller は rollout の dispatch、reward の収集、training buffer の管理、最新 policy weight の rollout replica への定期同期を行います。この設計により、rollout generation と policy optimization を疎結合に保ちながら、大規模な非同期 RL 学習を可能にします。
 
-We use
-[GRPO (Group Relative Policy Optimization)](https://arxiv.org/abs/2402.03300)
-as the RL algorithm.
+RL アルゴリズムとして [GRPO (Group Relative Policy Optimization)](https://arxiv.org/abs/2402.03300) を使います。
 
-### Key files
+<a id="key-files"></a>
+### 主要ファイル
 
-| Path                                                             | Purpose                                                                                                                                                                             |
-| ---------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `toml/alpamayo_rvla_rl_local_test.toml`                          | Cosmos-RL TOML config (local test) -- controls replica counts, parallelism, optimizer, rollout, reward weights, logging, and checkpointing. See Cosmos-RL docs for the full schema. |
-| `models/reasoning_vla/alpamayo_cosmos_rl_post_training_entry.py` | Entry script passed to `cosmos-rl` -- registers model, rollout, trainer, and reward                                                                                                 |
-| `hydra_configs/alpamayo1_rvla_rl_pai.yaml`                       | Hydra config for PAI dataset and preprocessing (see also `alpamayo1_5_rvla_rl_pai.yaml` for Alpamayo 1.5)                                                                           |
-| `launcher.py`                                                    | Shared launch logic that initializes state and calls the Cosmos worker                                                                                                              |
-| `rewards/aggregated_reward.py`                                   | Demo reward implementation (see [Reward](#reward) below)                                                                                                                            |
-| `../../scripts/convert_cosmos_rl_checkpoint.py`                  | Converts a Cosmos-RL policy checkpoint into a HuggingFace checkpoint directory (see [step 7](#7-export-the-rl-checkpoint-for-inference))                                            |
+| パス                                                             | 目的                                                                                                                                                    |
+| ---------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `toml/alpamayo_rvla_rl_local_test.toml`                          | Cosmos-RL TOML config (ローカルテスト)。replica 数、parallelism、optimizer、rollout、reward weight、logging、checkpointing を制御します。完全な schema は Cosmos-RL docs を参照してください。 |
+| `models/reasoning_vla/alpamayo_cosmos_rl_post_training_entry.py` | `cosmos-rl` に渡す entry script。model、rollout、trainer、reward を登録します                                                                            |
+| `hydra_configs/alpamayo1_rvla_rl_pai.yaml`                       | PAI データセットと preprocessing 用の Hydra config (Alpamayo 1.5 では `alpamayo1_5_rvla_rl_pai.yaml` も参照)                                            |
+| `launcher.py`                                                    | state を初期化し、Cosmos worker を呼び出す共通 launch logic                                                                                              |
+| `rewards/aggregated_reward.py`                                   | デモ reward 実装 (下の [報酬](#reward) を参照)                                                                                                          |
+| `../../scripts/convert_cosmos_rl_checkpoint.py`                  | Cosmos-RL policy checkpoint を HuggingFace checkpoint ディレクトリに変換します ([step 7](#7-export-the-rl-checkpoint-for-inference) を参照)              |
 
-### Key parameters
+<a id="key-parameters"></a>
+### 主要パラメータ
 
-| Parameter (TOML path)                 | Default (local test) | Meaning                                                                                                                                   |
-| ------------------------------------- | -------------------- | ----------------------------------------------------------------------------------------------------------------------------------------- |
-| `policy.parallelism.n_init_replicas`  | 1                    | Number of policy replicas. Each replica is an independent FSDP training worker. More replicas = larger global batch.                      |
-| `policy.parallelism.dp_shard_size`    | 4                    | GPUs per policy replica (FSDP sharding degree). `n_init_replicas × dp_shard_size` = total policy GPUs.                                    |
-| `rollout.parallelism.n_init_replicas` | 1                    | Number of rollout replicas. Each replica runs a vLLM engine that generates completions. Scale these to match policy consumption speed.    |
-| `train.train_batch_per_replica`       | 48                   | Training samples consumed per policy replica per step. **Global batch / step** = `policy.n_init_replicas × train_batch_per_replica`.      |
-| `rollout.batch_size`                  | 2                    | Prompts sent to a rollout replica in one batch.                                                                                           |
-| `rollout.n_generation`                | 12                   | Completions generated per prompt (the "group" in GRPO). Each prompt produces `n_generation` candidate rollouts that are ranked by reward. |
-| `train.sync_weight_interval`          | 2                    | Sync latest policy weights to rollout replicas every *N* training steps. Lower = fresher rollouts but more communication overhead.        |
+| パラメータ (TOML path)               | デフォルト (local test) | 意味                                                                                                                                   |
+| ------------------------------------ | ----------------------- | -------------------------------------------------------------------------------------------------------------------------------------- |
+| `policy.parallelism.n_init_replicas`  | 1                       | policy replica 数。各 replica は独立した FSDP training worker です。replica が多いほど global batch が大きくなります。                 |
+| `policy.parallelism.dp_shard_size`    | 4                       | policy replica あたりの GPU 数 (FSDP sharding degree)。`n_init_replicas × dp_shard_size` = policy GPU 総数。                           |
+| `rollout.parallelism.n_init_replicas` | 1                       | rollout replica 数。各 replica は completion を生成する vLLM engine を実行します。policy consumption speed に合わせて scale します。    |
+| `train.train_batch_per_replica`       | 48                      | policy replica ごと、step ごとに消費する training sample 数。**Global batch / step** = `policy.n_init_replicas × train_batch_per_replica`。 |
+| `rollout.batch_size`                  | 2                       | 1 batch で rollout replica に送られる prompt 数。                                                                                       |
+| `rollout.n_generation`                | 12                      | prompt ごとに生成する completion 数 (GRPO の "group")。各 prompt は reward で rank 付けされる `n_generation` 個の candidate rollout を生成します。 |
+| `train.sync_weight_interval`          | 2                       | 最新 policy weight を rollout replica に同期する training step 間隔。小さいほど rollout は新鮮になりますが、通信 overhead は増えます。 |
 
-**Dataloading acceleration.** Physical AI training samples are large.
-The default Cosmos-RL pipeline independently loads and preprocesses the
-same samples per GPU rank on a node, wasting both I/O bandwidth and CPU
-time. The node-level prefetch server (`prefetch/server.py`) fetches and
-preprocesses samples ahead of time, then shares the results with all
-local ranks via shared memory. This can reduce per-step policy iteration
-time significantly (e.g. 44 s → 5 s).
+**Dataloading acceleration.** Physical AI の training sample は大きいです。デフォルトの Cosmos-RL pipeline は、ノード上の GPU rank ごとに同じ sample を独立に読み込み preprocessing するため、I/O bandwidth と CPU time の両方を浪費します。node-level prefetch server (`prefetch/server.py`) は sample を事前に取得して preprocessing し、その結果を shared memory 経由で全 local rank と共有します。これにより、policy iteration の step time を大きく短縮できます (例: 44 秒 → 5 秒)。
 
-| Parameter (TOML path)                  | Default (local test) | Meaning                                                                                                                                                              |
-| -------------------------------------- | -------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `custom.alpamayo.prefetch.capacity`    | 16                   | Cache size (number of samples). Set to `train_batch_per_replica × replicas_per_node`. `<= 0` disables prefetch (falls back to synchronous per-rank dataset loading). |
-| `custom.alpamayo.prefetch.num_workers` | 5                    | Worker threads that fetch and preprocess samples in the background.                                                                                                  |
+| パラメータ (TOML path)                 | デフォルト (local test) | 意味                                                                                                                                                                  |
+| -------------------------------------- | ----------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `custom.alpamayo.prefetch.capacity`    | 16                      | cache size (sample 数)。`train_batch_per_replica × replicas_per_node` に設定します。`<= 0` で prefetch を無効化します (rank ごとの同期的 dataset loading に fallback)。 |
+| `custom.alpamayo.prefetch.num_workers` | 5                       | background で sample の取得と preprocessing を行う worker thread 数。                                                                                                  |
 
-### Reward
+<a id="reward"></a>
+### 報酬
 
-The included reward function
-([`rewards/aggregated_reward.py`](rewards/aggregated_reward.py))
-is a **demo implementation**. It grades each rollout sample on two axes
-and combines them into a single scalar:
+同梱の reward function ([`rewards/aggregated_reward.py`](rewards/aggregated_reward.py)) は **デモ実装**です。各 rollout sample を 2 つの軸で評価し、1 つの scalar に結合します。
 
-| Component   | How it is computed                                                                 | Weight key in TOML |
-| ----------- | ---------------------------------------------------------------------------------- | ------------------ |
-| **ADE**     | Average Displacement Error (L2) between predicted and ground-truth trajectory (XY) | `traj_l2_weight`   |
-| **Comfort** | Fraction of timesteps within comfort bounds (acceleration, jerk, yaw rate, etc.)   | `comfort_weight`   |
+| コンポーネント | 計算方法                                                                        | TOML の weight key |
+| -------------- | ------------------------------------------------------------------------------- | ------------------ |
+| **ADE**        | 予測軌道と ground-truth 軌道 (XY) の Average Displacement Error (L2)            | `traj_l2_weight`   |
+| **Comfort**    | comfort bounds (acceleration、jerk、yaw rate など) 内にある timestep の割合     | `comfort_weight`   |
 
-The reward uses a gated structure: if ADE exceeds a threshold (default 3.0 m),
-the reward is clamped to −1. Otherwise it is a weighted combination of
-the normalized ADE penalty and the comfort score. Weights are configured
-under `[custom.alpamayo.reward]` in the TOML.
+この reward は gated structure を使います。ADE が threshold (default 3.0 m) を超える場合、reward は -1 に clamp されます。それ以外の場合は、正規化された ADE penalty と comfort score の重み付き結合になります。weight は TOML の `[custom.alpamayo.reward]` 配下で設定します。
 
-> **Note:** This reward is provided as a starting point and only scores
-> the trajectory portion of the rollout. Alpamayo 1.5 was RL
-> post-trained with reasoning reward applied to the
-> chain-of-causation portion of the generation. You can implement
-> your own reward -- including one that grades both trajectory and
-> reasoning -- by following the same Cosmos-RL reward interface and
-> registering it in the entry script. See the FAQ entry
-> *"Can I use RL to post-train the reasoning (chain-of-thought)
-> generations?"* below for details on extracting the reasoning text
-> from a rollout.
+> **Note:** この reward は出発点として提供されており、rollout の trajectory 部分のみを採点します。Alpamayo 1.5 は、generation の chain-of-causation 部分に reasoning reward を適用して RL post-training されました。同じ Cosmos-RL reward interface に従い、entry script に登録することで、trajectory と reasoning の両方を採点するものを含め、独自の reward を実装できます。rollout から reasoning text を抽出する方法の詳細は、下の FAQ *"reasoning (chain-of-thought) generation を RL で post-train できますか？"* を参照してください。
 
-## Multi-node large-scale training
+<a id="multi-node-large-scale-training"></a>
+## マルチノード大規模学習
 
-The local test above runs on a single node. To scale to multi-node
-cluster training, two parameters in the TOML **must** be changed:
+上記のローカルテストは単一ノードで実行します。マルチノードクラスタ学習へスケールするには、TOML の 2 つのパラメータを**必ず**変更してください。
 
-1. **`policy.parallelism.dp_shard_size`** — set to 8. This controls FSDP
-   sharding: `n_policy_replicas × dp_shard_size` = total policy GPUs.
+1. **`policy.parallelism.dp_shard_size`** — 8 に設定します。これは FSDP sharding を制御します。`n_policy_replicas × dp_shard_size` = policy GPU 総数です。
 
-2. **`train.train_policy.data_dispatch_as_rank_in_mesh`** — set to
-   `true`. This enables rank-based data dispatch so each policy replica
-   consumes a stable, non-overlapping shard of the dataset. Without this,
-   multiple replicas may train on duplicate samples. This flag is also
-   required for running the data preloading.
+2. **`train.train_policy.data_dispatch_as_rank_in_mesh`** — `true` に設定します。これにより rank-based data dispatch が有効になり、各 policy replica が dataset の安定した重複しない shard を消費します。これがないと、複数の replica が重複 sample で学習する可能性があります。この flag は data preloading の実行にも必要です。
 
-It is also recommended to tune the following parameters for your
-specific setting. The values below are what we used to post-train
-Alpamayo 1.5:
+また、特定の設定に合わせて次のパラメータを調整することをおすすめします。下の値は Alpamayo 1.5 の post-training で使用したものです。
 
-| Parameter                             | Local test | Cluster training |
+| パラメータ                            | Local test | Cluster training |
 | ------------------------------------- | ---------- | ---------------- |
 | `policy.parallelism.n_init_replicas`  | 1          | 64               |
 | `rollout.parallelism.n_init_replicas` | 1          | 128              |
@@ -340,173 +291,114 @@ Alpamayo 1.5:
 | `rollout.n_generation`                | 12         | 12               |
 | `custom.alpamayo.prefetch.capacity`   | 16         | 128              |
 
-This gives a global batch of 64 × 40 = **2560** samples per training
-step, with 512 policy GPUs and 128 rollout GPUs (640 GPUs total, 80
-nodes). For SLURM launch instructions, see the
-[Cosmos-RL multi-node documentation](https://nvidia-cosmos.github.io/cosmos-rl/multinodes/overview.html).
+これにより、training step あたり 64 × 40 = **2560** sample の global batch になります。policy GPU は 512、rollout GPU は 128 です (合計 640 GPU、80 nodes)。SLURM の起動手順は [Cosmos-RL multi-node documentation](https://nvidia-cosmos.github.io/cosmos-rl/multinodes/overview.html) を参照してください。
 
-> **Tip:** Start with a moderate scale (e.g., 4 policy replicas,
-> 8 rollout replicas) and monitor `pending rollouts` in
-> `controller.log` before scaling up. See the FAQ entry *"How to
-> balance policy replicas and rollout replicas?"* for tuning guidance.
+> **Tip:** まず中規模 (例: policy replica 4、rollout replica 8) から始め、スケールアップ前に `controller.log` の `pending rollouts` を監視してください。tuning の目安は FAQ の *"policy replica と rollout replica の balance はどう取りますか？"* を参照してください。
 
+<a id="faq"></a>
 ## FAQ
 
 <details>
-<summary><strong>What exactly is being RL post-trained?</strong></summary>
+<summary><strong>具体的に何が RL post-training されますか？</strong></summary>
 
-This code RL post-trains the **VLM backbone** of the released Alpamayo
-models (ReasoningVLA). In this pathway, the VLM autoregressively generates
-text and discrete trajectory tokens. The action expert
-head (flow-matching-based continuous actions) is **not** trained
-by this RL pipeline. RL post-training for the **action expert pathway** will come in a future release.
+このコードは、公開済み Alpamayo モデル (ReasoningVLA) の **VLM backbone** を RL post-training します。この経路では、VLM が text と離散 trajectory token を autoregressive に生成します。action expert head (flow-matching ベースの continuous action) は、この RL pipeline では**学習されません**。**action expert pathway** の RL post-training は将来のリリースで提供予定です。
 
 </details>
 
 <details>
-<summary><strong>Can I post-train Alpamayo 1.5?</strong></summary>
+<summary><strong>Alpamayo 1.5 を post-train できますか？</strong></summary>
 
-Yes. Both [Alpamayo 1](https://huggingface.co/nvidia/Alpamayo-R1-10B) and
-[Alpamayo 1.5](https://huggingface.co/nvidia/Alpamayo-1.5-10B) are supported.
+はい。[Alpamayo 1](https://huggingface.co/nvidia/Alpamayo-R1-10B) と [Alpamayo 1.5](https://huggingface.co/nvidia/Alpamayo-1.5-10B) の両方をサポートしています。
 
-You need to change two things:
+変更が必要なのは 2 点です。
 
-1. Point `ALPAMAYO_MODEL_DIR` to the converted checkpoint of the model you want to use.
-2. In the entry script, set `hydra_config_name` to match your model:
+1. `ALPAMAYO_MODEL_DIR` を、使いたいモデルの変換済み checkpoint に向けます。
+2. entry script で、モデルに合うように `hydra_config_name` を設定します。
    - Alpamayo 1.5: `"alpamayo1_5_rvla_rl_pai"`
    - Alpamayo 1: `"alpamayo1_rvla_rl_pai"`
 
 </details>
 
 <details>
-<summary><strong>What can I do with this code and how to use the RL checkpoint?</strong></summary>
+<summary><strong>このコードで何ができますか？また RL checkpoint はどう使いますか？</strong></summary>
 
-- **Improve driving behavior** — define reward functions that target
-  trajectory accuracy, comfort, safety, or other driving metrics.
-- **Improve reasoning and scene understanding** — add rewards that grade
-  the text portion of the model's output, steering
-  the model toward better situational awareness and decision-making.
-- **Train on your own driving data** — prepare a dataset in the PAI
-  format, point the config to it, and run RL on your own scenarios.
-- **Using the RL checkpoint** — the exported checkpoint contains **only
-  the VLM backbone weights** (since RL only trains the VLM backbone). It
-  can be loaded into both Alpamayo 1 and Alpamayo 1.5 (from the
-  Alpamayo 1.5 directory with minor target renaming in the checkpoint's
-  model config) with non-strict weight loading for training the action
-  expert model with SFT. Note that the action expert weights will be
-  randomly initialized.
+- **運転挙動の改善** — trajectory accuracy、comfort、safety、その他の driving metric を対象にした reward function を定義できます。
+- **推論とシーン理解の改善** — モデル出力の text 部分を採点する reward を追加し、より良い状況認識と意思決定へモデルを誘導できます。
+- **独自の driving data での学習** — PAI format の dataset を準備し、config をそこへ向け、自分の scenario で RL を実行できます。
+- **RL checkpoint の使用** — export された checkpoint には **VLM backbone weights のみ**が含まれます (RL は VLM backbone のみを学習するため)。これは Alpamayo 1 と Alpamayo 1.5 の両方に読み込めます。Alpamayo 1.5 ディレクトリから使う場合は、checkpoint の model config で軽微な target renaming を行い、non-strict weight loading で SFT による action expert model の学習に使えます。action expert weights はランダム初期化される点に注意してください。
 
 </details>
 
 <details>
-<summary><strong>How do I replace the reward function?</strong></summary>
+<summary><strong>reward function を置き換えるには？</strong></summary>
 
-Implement your own reward following the Cosmos-RL reward interface and
-register it in the entry script
-(`finetune/rl/models/reasoning_vla/alpamayo_cosmos_rl_post_training_entry.py`).
-See [`finetune/rl/rewards/aggregated_reward.py`](rewards/aggregated_reward.py)
-for the expected signature and return format.
+Cosmos-RL reward interface に従って独自 reward を実装し、entry script (`finetune/rl/models/reasoning_vla/alpamayo_cosmos_rl_post_training_entry.py`) に登録してください。期待される signature と return format は [`finetune/rl/rewards/aggregated_reward.py`](rewards/aggregated_reward.py) を参照してください。
 
 </details>
 
 <details>
-<summary><strong>Can I use RL to post-train the reasoning (chain-of-thought) generations?</strong></summary>
+<summary><strong>reasoning (chain-of-thought) generation を RL で post-train できますか？</strong></summary>
 
-Yes. The model generates reasoning text before `<|cot_end|>` and trajectory
-tokens after `<|traj_future_start|>`. Both are part of the single rollout
-completion string (`to_be_evaluated`) passed to the reward function. The
-current default reward (`aggregated_reward.py`) only scores the trajectory
-portion (ADE + comfort), but you can extend it to also grade the reasoning
-trace.
+はい。モデルは `<|cot_end|>` の前に reasoning text を、`<|traj_future_start|>` の後に trajectory token を生成します。どちらも reward function に渡される単一の rollout completion string (`to_be_evaluated`) の一部です。現在の default reward (`aggregated_reward.py`) は trajectory 部分 (ADE + comfort) のみを採点しますが、reasoning trace も採点するように拡張できます。
 
-To extract the reasoning text from a rollout completion:
+rollout completion から reasoning text を抽出するには、次のようにします。
 
 ```python
 reasoning_text = to_be_evaluated.split("<|cot_end|>")[0]
 ```
 
-You can then score it with a custom reasoning reward (e.g., an LLM-based
-grader, rule-based checks, or a learned reward model). We will soon release
-reasoning labels and a corresponding reasoning reward function.
+その後、custom reasoning reward (例: LLM-based grader、rule-based check、learned reward model) で採点できます。reasoning label と対応する reasoning reward function は近日公開予定です。
 
 </details>
 
 <details>
-<summary><strong>What is the recommended number of GPUs?</strong></summary>
+<summary><strong>推奨 GPU 数は？</strong></summary>
 
-It depends on the dataset size. A larger global batch size
-(`policy.parallelism.n_init_replicas` × `train.train_batch_per_replica`)
-generally gives better RL performance.
+データセットサイズによって異なります。一般に、より大きな global batch size (`policy.parallelism.n_init_replicas` × `train.train_batch_per_replica`) は、より良い RL performance につながります。
 
-As a rough guide:
+おおまかな目安:
 
 | Scale                  | Policy                                              | Rollout                           | `train_batch_per_replica` | `rollout.batch_size` × `n_generation` | Global batch / step |
 | ---------------------- | --------------------------------------------------- | --------------------------------- | ------------------------- | ------------------------------------- | ------------------- |
 | Local test (1 node)    | 4 GPUs, 1 replica, `dp_shard_size=4`                | 1 GPU, 1 replica                  | 48                        | 2 × 12 = 24                           | 48                  |
 | Large scale (80 nodes) | 64 nodes (512 GPUs): 64 replicas, `dp_shard_size=8` | 16 nodes (128 GPUs): 128 replicas | 40                        | 6 × 12 = 72                           | 2560                |
 
-- **Global batch / step** = `n_init_replicas` × `train_batch_per_replica`.
-- **Policy GPUs** determine training speed and global batch size. The model
-  is sharded across GPUs via FSDP (`dp_shard_size`).
-- **Rollout GPUs** determine data generation throughput. Scale rollout
-  replicas to match policy consumption speed.
-- **Keep rollout ≈ policy speed**: if rollout is too fast, data becomes
-  stale; if too slow, policy idles. Monitor `pending rollouts` in the
-  controller log.
+- **Global batch / step** = `n_init_replicas` × `train_batch_per_replica`。
+- **Policy GPUs** は学習速度と global batch size を決めます。モデルは FSDP (`dp_shard_size`) によって GPU 間で shard されます。
+- **Rollout GPUs** は data generation throughput を決めます。policy consumption speed に合わせて rollout replica を scale してください。
+- **rollout ≈ policy speed を保つ**: rollout が速すぎると data が stale になり、遅すぎると policy が idle になります。controller log の `pending rollouts` を監視してください。
 
 </details>
 
 <details>
-<summary><strong>What is the recommended workflow for new reward, data, and model?</strong></summary>
+<summary><strong>新しい reward、data、model に対する推奨 workflow は？</strong></summary>
 
-1. **Overfit on 1 sample.** Curate a single training sample and run RL
-   locally. Verify the reward increases. This confirms that
-   the reward function, data pipeline, and model are wired correctly.
+1. **1 sample に overfit する。** 単一の training sample を作成し、ローカルで RL を実行します。reward が増加することを確認してください。これにより、reward function、data pipeline、model が正しく接続されていることを確認できます。
 
-2. **Overfit on a small set (~16–32 samples) on one node.** Check that
-   the reward improves across multiple epochs.
-   Use this stage to tune reward weights, learning rate, and
-   `n_generation`. Watch for rollout/policy speed imbalance (see
-   the FAQ entry *"How to balance policy replicas and rollout replicas?"*
-   below).
+2. **1 ノードで小さな集合 (~16-32 samples) に overfit する。** 複数 epoch にわたって reward が改善することを確認します。この段階で reward weight、learning rate、`n_generation` を調整してください。rollout/policy speed imbalance に注意します (下の FAQ *"policy replica と rollout replica の balance はどう取りますか？"* を参照)。
 
-3. **Scale to multi-node.** Increase policy and rollout replicas. Monitor
-   `pending rollouts` and `weight_version` gap to ensure the system is
-   balanced. Start with a moderate global batch size (e.g., 320) and scale
-   up if reward variance is too high.
+3. **マルチノードへ scale する。** policy replica と rollout replica を増やします。`pending rollouts` と `weight_version` gap を監視し、system が balanced であることを確認します。中程度の global batch size (例: 320) から始め、reward variance が高すぎる場合は scale up します。
 
-4. **Iterate on the reward function.** RL will optimize whatever the
-   reward measures. If model behavior is not improving as expected,
-   revisit the reward design before scaling further.
+4. **reward function を反復改善する。** RL は reward が測定するものを最適化します。model behavior が期待どおりに改善しない場合は、さらに scale する前に reward design を見直してください。
 
 </details>
 
 <details>
-<summary><strong>How to balance policy replicas and rollout replicas?</strong></summary>
+<summary><strong>policy replica と rollout replica の balance はどう取りますか？</strong></summary>
 
-Rollout replicas generate data asynchronously while policy replicas consume
-it for training. The two sides must run at roughly the same throughput.
+rollout replica は非同期に data を生成し、policy replica はそれを学習に消費します。両者はおおむね同じ throughput で動く必要があります。
 
-**Rollout too fast (most common):** completed rollouts pile up in the
-controller buffer. By the time the policy trains on them, its weights have
-moved far beyond the weights that generated those rollouts (large
-`weight_version` gap → off-policy data → degraded training quality). In the
-extreme case, rollout workers finish all epochs while training is only
-halfway done.
+**Rollout が速すぎる (最も一般的):** 完了した rollout が controller buffer に積み上がります。policy がそれらで学習するころには、policy weight が rollout を生成した weight から大きく進んでいます (大きな `weight_version` gap → off-policy data → training quality の低下)。極端な場合、rollout worker はすべての epoch を終えているのに、training はまだ半分しか進んでいません。
 
-**Rollout too slow:** the policy idles waiting for data; GPU utilization
-drops.
+**Rollout が遅すぎる:** policy が data 待ちで idle になり、GPU utilization が低下します。
 
-**How to diagnose** — check these metrics in the controller log:
+**診断方法** — controller log で次の metric を確認します。
 
-1. **`pending rollouts` grows monotonically** (rollout too fast): the buffer
-   never drains.
-2. **Rollout ends early**: `[Controller] All rollouts have ended` appears
-   while training is far from `total_steps`.
-3. **`pending rollouts` frequently drops to zero** (rollout too slow): the
-   policy waits for the next rollout batch.
+1. **`pending rollouts` が単調増加する** (rollout が速すぎる): buffer が drain されません。
+2. **Rollout が早期終了する**: training が `total_steps` から遠い段階で `[Controller] All rollouts have ended` が表示されます。
+3. **`pending rollouts` が頻繁に 0 まで落ちる** (rollout が遅すぎる): policy が次の rollout batch を待っています。
 
-**Example — rollout too fast:**
+**例 — rollout が速すぎる場合:**
 
 ```text
 # controller.log — buffer grows every step, never drains
@@ -518,7 +410,7 @@ Stat: samples=2400  pending=  984          ← rollout outpacing policy
 # training is at step 37/60 — 23 more steps will use stale rollouts
 ```
 
-**Example — well balanced:**
+**例 — balance が取れている場合:**
 
 ```text
 # controller.log — buffer stays small, oscillates
@@ -528,21 +420,17 @@ Stat: samples=1200  pending=   72
 Stat: samples=2400  pending=   48          ← not accumulating
 ```
 
-**Tuning knobs (from fastest to try):**
+**調整ノブ (試しやすい順):**
 
-| Knob                                          | Effect                                                | When to use                                 |
-| --------------------------------------------- | ----------------------------------------------------- | ------------------------------------------- |
-| Enable prefetch (`prefetch.capacity > 0`)     | Reduces policy iteration time (e.g. 44 s → 12 s)      | Always recommended; biggest single win      |
-| Reduce `rollout.batch_size` or `n_generation` | Slows rollout throughput                              | When rollout is much faster than policy     |
-| Add rollout replicas                          | Speeds up rollout throughput                          | When policy idles waiting for data          |
-| Add policy replicas (`n_init_replicas`)       | Speeds up policy (more parallel training)             | When rollout outpaces policy at large scale |
-| Increase `dp_shard_size`                      | Speeds up per-step training via more data parallelism | When each step is too slow                  |
-| Reduce `epoch` or set `max_num_steps`         | Fewer total rollouts to generate                      | When rollout finishes far before training   |
+| ノブ                                          | 効果                                                  | 使う場面                                      |
+| --------------------------------------------- | ----------------------------------------------------- | --------------------------------------------- |
+| prefetch を有効化 (`prefetch.capacity > 0`)   | policy iteration time を短縮 (例: 44 秒 → 12 秒)      | 常に推奨。単体で最も効果が大きい              |
+| `rollout.batch_size` または `n_generation` を減らす | rollout throughput を下げる                           | rollout が policy よりかなり速い場合          |
+| rollout replica を追加                        | rollout throughput を上げる                           | policy が data 待ちで idle になる場合         |
+| policy replica (`n_init_replicas`) を追加      | policy を高速化する (より並列な学習)                  | 大規模で rollout が policy を上回る場合       |
+| `dp_shard_size` を増やす                      | より多い data parallelism で step ごとの学習を高速化  | 各 step が遅すぎる場合                        |
+| `epoch` を減らす、または `max_num_steps` を設定する | 生成すべき rollout 総数を減らす                       | rollout が training よりかなり早く終わる場合  |
 
-**Target state:** `pending rollouts` stays roughly stable. In a healthy
-large-scale job (64 policy replicas, 128 rollout replicas, global
-batch = 2560), the buffer typically holds 4× the global batch size. The `weight_version` gap within each
-training batch should stay within a few multiples of
-`sync_weight_interval`.
+**目標状態:** `pending rollouts` がほぼ安定している状態です。健全な大規模ジョブ (policy replica 64、rollout replica 128、global batch = 2560) では、buffer は通常 global batch size の 4 倍程度を保持します。各 training batch 内の `weight_version` gap は、`sync_weight_interval` の数倍以内に収まるべきです。
 
 </details>

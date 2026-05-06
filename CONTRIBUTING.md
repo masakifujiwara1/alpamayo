@@ -1,29 +1,29 @@
-## Alpamayo 1 OSS Contribution Rules
+## Alpamayo 1 OSS コントリビューションルール
 
-#### Issue Tracking
+#### Issue 管理
 
-- All enhancement, bugfix, or change requests must begin with the creation of an [Alpamayo 1 Issue Request](https://github.com/NVlabs/alpamayo/issues).
-  - The issue request must be reviewed by Alpamayo 1 researchers and approved prior to code review.
+- 機能追加、バグ修正、変更リクエストはすべて、まず [Alpamayo 1 Issue Request](https://github.com/NVlabs/alpamayo/issues) を作成するところから始めてください。
+  - Issue request は、コードレビュー前に Alpamayo 1 の研究者によるレビューと承認が必要です。
 
-#### Coding Guidelines
+#### コーディングガイドライン
 
-- Please follow the existing conventions in the relevant file, submodule, module, and project when you add new code or when you extend/fix existing functionality.
+- 新しいコードを追加する場合や既存機能を拡張・修正する場合は、該当するファイル、サブモジュール、モジュール、プロジェクトの既存規約に従ってください。
 
-- To maintain consistency in code formatting and style, you should also run `pre-commit format` on the modified sources with the provided configuration file. This applies Alpamayo 1 code formatting rules to:
+- コードフォーマットとスタイルの一貫性を保つため、提供されている設定ファイルを使って、変更したソースに対して `pre-commit format` も実行してください。これにより、Alpamayo 1 のコードフォーマット規則が次の項目に適用されます。
 
-  - class, function/method, and variable/field naming
-  - comment style
-  - indentation
-  - line length
+  - クラス、関数/メソッド、変数/フィールドの命名
+  - コメントスタイル
+  - インデント
+  - 行長
 
-- Avoid introducing unnecessary complexity into existing code so that maintainability and readability are preserved.
+- 保守性と可読性を保つため、既存コードに不要な複雑さを持ち込まないでください。
 
-- Try to keep pull requests (PRs) as concise as possible:
+- Pull Request (PR) はできるだけ簡潔に保ってください。
 
-  - Avoid committing commented-out code.
-  - Wherever possible, each PR should address a single concern. If there are several otherwise-unrelated things that should be fixed to reach a desired endpoint, our recommendation is to open several PRs and indicate the dependencies in the description. The more complex the changes are in a single PR, the more time it will take to review those changes.
+  - コメントアウトされたコードをコミットしないでください。
+  - 可能な限り、各 PR は 1 つの関心事だけを扱うようにしてください。目的を達成するために互いに無関係な複数の修正が必要な場合は、複数の PR を作成し、説明文で依存関係を示すことを推奨します。1 つの PR に含まれる変更が複雑になるほど、レビューに時間がかかります。
 
-- Write commit titles using imperative mood and [these rules](https://chris.beams.io/posts/git-commit/), and reference the Issue number corresponding to the PR. Following is the recommended format for commit texts:
+- コミットタイトルは命令形で書き、[これらのルール](https://chris.beams.io/posts/git-commit/)に従い、PR に対応する Issue 番号を参照してください。コミットメッセージの推奨形式は次のとおりです。
 
 ```
 #<Issue Number> - <Commit Title>
@@ -31,65 +31,65 @@
 <Commit Body>
 ```
 
-- Ensure that the build log is clean, meaning no warnings or errors should be present.
+- ビルドログに警告やエラーがなく、クリーンであることを確認してください。
 
-- Ensure that all tests pass prior to submitting your code.
+- コードを提出する前に、すべてのテストが通ることを確認してください。
 
-- All OSS components must contain accompanying documentation (READMEs) describing the functionality, dependencies, and known issues.
+- すべての OSS コンポーネントには、機能、依存関係、既知の問題を説明するドキュメント (README) を添付する必要があります。
 
-  - See `README.md` for existing samples and plugins for reference.
+  - 既存のサンプルやプラグインについては `README.md` を参照してください。
 
-- All OSS components must have an accompanying test.
+- すべての OSS コンポーネントには、対応するテストが必要です。
 
-  - If introducing a new component, provide a test sample to verify the functionality.
+  - 新しいコンポーネントを導入する場合は、機能を検証するテストサンプルを提供してください。
 
-- Make sure that you can contribute your work to open source (no license and/or patent conflict is introduced by your code). You will need to [`sign`](#signing-your-work) your commit.
+- 自分の作業をオープンソースへ提供できることを確認してください (コードによってライセンスまたは特許の衝突が生じないこと)。コミットには [`sign`](#signing-your-work) が必要です。
 
-- Thanks in advance for your patience as we review your contributions; we do appreciate them!
+- コントリビューションのレビューには時間がかかる場合があります。ご理解に感謝します。皆さまの貢献を歓迎しています。
 
-#### Pull Requests
+#### Pull Request
 
-Developer workflow for code contributions is as follows:
+コードコントリビューションの開発者ワークフローは次のとおりです。
 
-1. Developers must first [fork](https://help.github.com/en/articles/fork-a-repo) the [upstream](https://github.com/NVlabs/alpamayo) Alpamayo 1 OSS repository.
+1. 開発者はまず [upstream](https://github.com/NVlabs/alpamayo) の Alpamayo 1 OSS リポジトリを [fork](https://help.github.com/en/articles/fork-a-repo) する必要があります。
 
-2. Git clone the forked repository and push changes to the personal fork.
+2. fork したリポジトリを git clone し、変更を個人の fork に push します。
 
 ```bash
 git clone https://github.com/YOUR_USERNAME/YOUR_FORK.git Alpamayo-1
-# Checkout the targeted branch and commit changes
-# Push the commits to a branch on the fork (remote).
+# 対象ブランチをチェックアウトして変更をコミットする
+# fork 上のブランチ (remote) にコミットを push する
 git push -u origin <local-branch>:<remote-branch>
 ```
 
-3. Once the code changes are staged on the fork and ready for review, a [Pull Request](https://help.github.com/en/articles/about-pull-requests) (PR) can be [requested](https://help.github.com/en/articles/creating-a-pull-request) to merge the changes from a branch of the fork into a selected branch of upstream.
+3. コード変更が fork 上で stage され、レビューの準備ができたら、fork のブランチから upstream の選択したブランチへ変更を merge する [Pull Request](https://help.github.com/en/articles/about-pull-requests) (PR) を [作成](https://help.github.com/en/articles/creating-a-pull-request) できます。
 
-- Exercise caution when selecting the source and target branches for the PR.
-- Creation of a PR creation kicks off the code review process.
-- At least one Alpamayo 1 researcher will be assigned for the review.
-- While under review, mark your PRs as work-in-progress by prefixing the PR title with [WIP].
+- PR の source branch と target branch を選ぶ際は注意してください。
+- PR を作成するとコードレビューのプロセスが始まります。
+- 少なくとも 1 名の Alpamayo 1 研究者がレビュー担当として割り当てられます。
+- レビュー中の PR は、PR タイトルの先頭に `[WIP]` を付けて work-in-progress として示してください。
 
-4. Since there is no CI/CD process in place yet, the PR will be accepted and the corresponding issue closed only after adequate testing has been completed, manually, by the developer and/or Alpamayo 1 researcher reviewing the code.
+4. 現時点では CI/CD プロセスがないため、PR は、開発者および/またはレビュー担当の Alpamayo 1 研究者による十分な手動テストが完了した後にのみ承認され、対応する Issue が close されます。
 
 #### Signing Your Work
 
-- We require that all contributors "sign-off" on their commits. This certifies that the contribution is your original work, or you have rights to submit it under the same license, or a compatible license.
+- すべてのコントリビューターに、コミットへの "sign-off" を求めています。これは、その貢献があなた自身の作業であること、または同じライセンスもしくは互換ライセンスのもとで提出する権利があることを証明するものです。
 
-  - Any contribution which contains commits that are not Signed-Off will not be accepted.
+  - Signed-Off されていないコミットを含むコントリビューションは受け付けられません。
 
-- To sign off on a commit you simply use the `--signoff` (or `-s`) option when committing your changes:
+- コミットに sign off するには、コミット時に `--signoff` (または `-s`) オプションを使います。
 
   ```bash
   $ git commit -s -m "Add cool feature."
   ```
 
-  This will append the following to your commit message:
+  これにより、コミットメッセージに次の行が追加されます。
 
   ```
   Signed-off-by: Your Name <your@email.com>
   ```
 
-- Full text of the DCO:
+- DCO の全文:
 
   ```
     Developer Certificate of Origin
