@@ -1,0 +1,42 @@
+{
+  "name": "alpamayo",
+  "build": {
+    "context": "..",
+    "dockerfile": "Dockerfile",
+    "args": {
+      "USER_ID": "1000",
+      "USER_GID": "1000",
+      "USER_NAME": "ubuntu"
+    }
+  },
+  "remoteUser": "ubuntu",
+  "workspaceFolder": "/workspaces/alpamayo",
+  "runArgs": [
+    "--gpus=all",
+    "--ipc=host",
+    "--shm-size=32g",
+    "--ulimit=memlock=-1",
+    "--ulimit=stack=67108864"
+  ],
+  "features": {
+    "ghcr.io/devcontainers/features/python:1": {
+      "version": "3.12"
+    }
+  },
+  "remoteEnv": {
+    "PATH": "/home/ubuntu/.local/bin:${containerEnv:PATH}",
+    "HF_HOME": "/home/ubuntu/.cache/huggingface",
+    "UV_LINK_MODE": "copy"
+  },
+  "customizations": {
+    "vscode": {
+      "extensions": [
+        "ms-python.python",
+        "ms-python.vscode-pylance",
+        "ms-toolsai.jupyter",
+        "charliermarsh.ruff"
+      ]
+    }
+  },
+  "postCreateCommand": "python -m pip install --user -U uv && uv sync --dev"
+}
