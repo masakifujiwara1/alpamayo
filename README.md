@@ -85,6 +85,48 @@ the `num_traj_samples=1` argument to a higher number (Line 60).
 
 We provide a notebook with similar inference code at `notebook/inference.ipynb`.
 
+### TensorRT expert acceleration
+
+The expert denoiser can be exported to ONNX, quantized with SmoothQuant + INT8
+QDQ, and executed through ONNX Runtime's TensorRT Execution Provider. This
+accelerates the expert step only; the VLM and the default PyTorch inference path
+remain unchanged unless a TRT runner is attached.
+
+Install the optional TRT build dependencies:
+
+```bash
+uv sync --active --group trt
+```
+
+Build the engine artifacts:
+
+```bash
+python scripts/build_trt_expert_engine.py --output-dir ~/alpamayo_data/trt/v0.1
+```
+
+The script writes `expert_step.int8.qdq.onnx`, an `engine_cache/` directory, and
+`manifest.json`. Key options include `--num-calibration-samples`,
+`--calibration-method`, `--smoothquant-alpha`, and `--skip-validation`.
+
+Attach the TensorRT runner in Python:
+
+```python
+import torch
+
+from alpamayo_r1.models.alpamayo_r1 import AlpamayoR1
+from alpamayo_r1.trt.expert_runtime import TrtExpertEngine
+
+model = AlpamayoR1.from_pretrained(
+    "nvidia/Alpamayo-R1-10B",
+    dtype=torch.bfloat16,
+).to("cuda")
+engine = TrtExpertEngine(
+    onnx_model_path="~/alpamayo_data/trt/v0.1/expert_step.int8.qdq.onnx",
+    engine_cache_dir="~/alpamayo_data/trt/v0.1/engine_cache",
+)
+model.set_expert_step_runner(engine)
+```
+
 ## Relationship with the Paper
 
 Alpamayo 1 implements the architecture described in our paper [*"Alpamayo-R1: Bridging Reasoning and Action Prediction for Generalizable Autonomous Driving in the Long Tail
